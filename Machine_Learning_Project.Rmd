@@ -1,0 +1,205 @@
+---
+title: "Applied Machine Learning in Economics - Final Project on Banking Term Deposit"
+date: "2024-04-28"
+output: html_document
+---
+
+# Abstract
+This study analyzes demographic, economic, and interactional factors that influence bank clients' subscription to term deposits using a dataset of over 45,000 profiles. Employing machine learning techniques, we identify which client characteristics most significantly affect their investment decisions. The insights gained enable banks to enhance marketing strategies more effectively, improving investment rates and demonstrating the value of machine learning in strategic banking decisions.
+
+# Introduction
+Banks play a important role in fostering economic growth and stability by effectively allocating financial resources. They utilize targeted marketing strategies to engage potential clients and promote appropriate financial products. In this study, we analyze the "banking-dataset-marketing-targets" dataset from Kaggle [1], featuring 45,211 records and 16 predictive factors, using techniques like logistic regression, Lasso regression, decision trees, and random forests. Focusing on twelve key variables, we aim to predict and understand customer behaviors that influence term deposit subscriptions. This approach not only improves the efficiency of marketing campaigns but also contributes significantly to the field of financial analytics.
+
+Link of the dataset: https://www.kaggle.com/datasets/prakharrathi25/banking-dataset-marketing-targets?select=test.csv
+
+# Literature Review
+Since the topic of term deposits is significant, many relevant studies exist. In a paper titled "Long-term Deposits Prediction: A Comparative Framework of Classification Models for Predicting the Success of Bank Telemarketing," Ahmad Ilham et al.(2019) attempt to identify the best strategy for maximizing customer value through telemarketing. They implements multiple methods, including KNN, Decision Tree, and Random Forest. The study concludes that the best strategy to use is SVM [2]. 
+\
+\
+Link of the Paper: https://iopscience.iop.org/article/10.1088/1742-6596/1175/1/012035/meta
+\
+\
+Another important aspect in forecasting the future of term deposits is accurately identifying the right customers. In a study titled "Identifying Long-Term Deposit Customers: A Machine Learning Approach," Mohammad Abu Tareq Rony et al.(2021) aim to determine the characteristics of potential or future customers using a machine learning strategy. The paper also notes that due to recent economic turmoil, banks need to sell more term deposits to alleviate pressure. The results show that logistic regression is more effective than other methods [3].
+\
+\
+Link of the Paper: https://ieeexplore.ieee.org/abstract/document/9672452
+
+# Full Model
+```{r,message=FALSE}
+library(ISLR)
+library(glmnet)
+library(caret)
+library(olsrr)
+library(MASS)
+library(leaps)
+library(class)
+library(dplyr)
+library(tree)
+library(randomForest)
+```
+
+#Read Data
+```{r}
+df <- na.omit(read.csv("Marketing Targets.csv",stringsAsFactors = TRUE))
+names(df)
+
+df$balance <- as.numeric(df$balance)
+df$pdays <- as.numeric(df$pdays)
+df$y <- ifelse(df$y == "yes",1,0)
+
+full_model <- glm(y ~. ,data = df, family = binomial())
+summary(full_model)
+dim(df)
+```
+We create a dummy variable for y. If y is "yes," it means that the person has a subscription, which we represent with a 1.
+
+# Variable Selection
+```{r echo=FALSE, results='hide'}
+#USE Stepwise method and AIC to do variable selection.
+stepwise_model <- stepAIC(full_model, direction = "both")
+```
+
+```{r}
+summary(stepwise_model)
+
+#New model & New data
+new_df <- df[c("y", "job", "marital", "education", "balance", "housing", "loan", "contact", "month", "duration", "campaign", "previous", "poutcome")]
+new_mod <- glm(y ~. ,data = new_df, family = binomial())
+```
+Finally, the model we chose from this method is y ~ job + marital + education + balance + housing loan + contact + month + duration + campaign + previous + poutcome, and we create a new data frame with these variable names, new_df, which we will use for further data analysis.
+
+# Train & Test 
+```{r}
+x <- model.matrix(y ~ ., new_df)[, -1]
+y <- new_df$y
+set.seed(1)
+splitIndex <- createDataPartition(new_df$y, p = 0.5, list = FALSE)
+train_set <- new_df[splitIndex, ]
+test_set <- new_df[-splitIndex, ]
+train <- sample(1:nrow(x), nrow(x) / 2)
+test <- (-train)
+y.test <- y[test]
+```
+In this step, we split the data into training and testing datasets, with approximately 50% of the data in each.
+
+# Logistics model prediction:
+```{r}
+set.seed(1)
+prediction <- predict(new_mod, test_set, type = "response")
+glm.pre <- ifelse(prediction > 0.5, 1, 0)
+test_error <- mean(glm.pre != test_set$y)
+test_error
+table(Predicted = glm.pre, Actual = test_set$y)
+```
+Based on the confusion matrix, the logistic regression model has a test error rate of approximately 16.9%, indicating it errs about 17% of the time. Specifically, the model accurately predicted non-subscription in 2,218 instances and subscription in 2,175 instances. However, there were instances where the model's predictions deviated from actual outcomes, specifically, 469 false negatives and 426 false positives.
+
+# LASSO Prediction:
+```{r}
+set.seed(1)
+
+grid <- 10^seq(10, -2, length = 100)
+lasso_mod <- glmnet(x[train, ], y[train], alpha = 1, lambda = grid)
+
+cv.out <- cv.glmnet(x[train, ], y[train], alpha = 1)
+plot(cv.out)
+bestlam <- cv.out$lambda.min
+bestlam
+
+lasso.pred <- predict(lasso_mod, s = bestlam, newx = x[test, ])
+MSE_LASSO <- mean((lasso.pred - y.test)^2)
+MSE_LASSO
+```
+The LASSO regression model determined an optimal lambda of approximately 0.0011 and achieved a test MSE of 14.62% on the test data.
+
+# Classification Tree
+```{r}
+set.seed(1)
+new_df$y <- as.factor(new_df$y)
+test_set$y <- as.factor(test_set$y)
+
+tree <- tree(y ~ ., new_df)
+tree
+summary(tree)
+
+number_of_terminal_nodes <- summary(tree)$size
+number_of_terminal_nodes
+
+#The traning MSE is 0.2175 and the number of terminal nodes for our tree is 9
+
+plot(tree)
+text(tree, pretty = 0)
+
+
+tree.train <- tree(y ~ ., new_df, subset = train)
+tree.pred <- predict(tree.train, test_set, type = "class")
+table(tree.pred, test_set$y)
+
+MSE_Tree <- (174 + 962) / (1682+174+962+2470)
+MSE_Tree
+
+#Unpruned Tree:
+cv <- cv.tree(tree.train, FUN = prune.misclass)
+cv
+
+plot(cv$size, cv$dev, type = "b")
+
+#Pruned Tree:
+prune.tree <- prune.misclass(tree.train, best = 6)
+
+plot(prune.tree)
+text(prune.tree, pretty = 0)
+
+
+tree.pred_prune <- predict(prune.tree, test_set, type = "class")
+table(tree.pred_prune, test_set$y)
+
+MSE_Pruned_Tree <- (174+962)/ (1682+174+962+2470)
+MSE_Pruned_Tree
+```
+
+For the unpruned decision tree: 
+The model outlines a sequence of binary decisions based on features such as duration, contact, month, and previous outcome to predict a binary target class. Specifically, for calls with a duration of 206.5 minutes or less, the time of the year and previous contact outcomes are decisive. If the call occurred during the months of August, January, July, June, May, or November, and if the outcome of any previous contact was a failure, other, or unknown, the model considers the duration again: for durations less than or equal to 127.5 minutes, it predicts class 0 (indicating the client will likely not subscribe to a term deposit); for durations longer than 127.5 minutes, it predicts class 1 (indicating the client will likely subscribe). Conversely, for calls longer than 206.5 minutes, if the contact type is unknown, the model predicts class 1, but if the contact type is known, the prediction depends on the month and the previous outcome—if they match the specified criteria, the model again predicts class 1. This decision-making process underscores the significance of interaction between call duration, timing, and prior customer engagement in influencing the model's predictions.
+
+For the pruned decision tree: 
+The model provides a straightforward classification based on call duration and contact details. For calls under 206.5 minutes, if they occurred in specific months—August, January, July, June, or May—and the previous outcome was negative or unknown, the prediction is positive, possibly indicating a subscription to a term deposit. Conversely, for longer calls exceeding 206.5 minutes, if the contact method was unknown, the likelihood of a positive outcome increases, signifying a higher chance of subscription. This model emphasizes the importance of engagement duration and prior contact history in predicting customer behavior.
+
+The classification tree model has an MSE of 0.214826. The pruned tree model maintains the same MSE of 0.214826, suggesting that the pruning process has not impacted the model's average error per prediction.
+
+# Random Forest 
+```{r}
+set.seed(1)
+rf_mod <- randomForest(y ~ ., data = new_df, subset = train, mtry = 4, importance = TRUE)
+rf_mod
+
+importance(rf_mod)
+
+varImpPlot(rf_mod)
+```
+
+Using the random forest, we found that duration is the most important variable for predicting term deposit subscription.
+
+# Conclusion
+Through Logistic regression, it shows the test error rate of approximately 16.92%. The corresponding confusion matrix proves the model's credible differentiation between likely subscribers and non-subscribers, along with some room for enhancement given the number of false positives and negatives.
+
+Incorporating the insights from the LASSO regression model, our comprehensive analysis reveals various factors influencing term deposit subscriptions. The LASSO model identified the lambda of approximately 0.0011. This achieved an test MSE of 14.62%.
+
+The decision tree, with an identical MSE of 0.214826 before and after pruning, emphasizes the stability of the model's predictive capacity—even when simplified to its most important components. The pruned version maintains its predictive acuity and shows that the duration of customer engagement is a important predictor for term deposit subscriptions.
+
+The random forest analysis demonstrates this finding, with 'duration' presenting as the most influential feature across the dataset. This model's ability to account for the non-linearity and interaction between variables offers a more comprehensive view, further proving 'duration' as a key determinant.
+
+Comparing these models, we observed that the test error rate for the logistic regression method is 16.92%, which is reasonably low. This suggests it could potentially be a good method for prediction. Additionally, we compared three other methods and found that LASSO has the lowest test mean squared error (MSE), indicating that LASSO performs the best on this specific dataset. These results provide valuable insights for model selection in future predictions involving other datasets.
+
+In summary, our findings are multidimensional, influenced by results from logistic regression, LASSO, decision trees, and random forest models. The agreement among these models highlights the importance of how long clients interact with banks. It clearly suggests that banks should focus on improving the length and quality of these interactions. Using this information in marketing strategies could greatly help increase the number of term deposit subscribers. This approach also fits with the wider goal of building long-lasting and profitable customer relationships.
+
+# References
+[1] Rathi, P. (2020). Banking dataset - marketing targets. Kaggle. https://www.kaggle.com/datasets/prakharrathi25/banking-dataset-marketing-targets?select=test.csv 
+\
+\
+[2] Ilham, A., Khikmah, L., Indra, Ulumuddin, & Bagus Ary Indra Iswara, I. (2019, March). Long-term deposits prediction: a comparative framework of classification model for predict the success of bank telemarketing. In Journal of Physics: Conference Series (Vol. 1175, p. 012035). IOP Publishing.
+\
+\
+[3] Rony, M. A. T., Hassan, M. M., Ahmed, E., Karim, A., Azam, S., & Reza, D. A. (2021, December). Identifying long-term deposit customers: a machine learning approach. In 2021 2nd International Informatics and Software Engineering Conference (IISEC) (pp. 1-6). IEEE.
+\
+\
+\
+\
